@@ -55,8 +55,17 @@ static int shm_open(const char *name, int oflag, mode_t mode) {
 		tmpdir = "/tmp";
 	}
 	asprintf(&fname, "%s/%s", tmpdir, name);
-	return open(fname, oflag, mode);
+	int fd = open(fname, oflag, mode);
+
+	int flags = fcntl(fd, F_GETFL);
+	flags |= O_CLOEXEC;
+	
+	int res = fcntl(fd, F_SETFL, O_CLOEXEC);
+	if (res == -1) return res;
+	
+	return fd;
 }
+
 static int shm_unlink(const char *name) {
 	char *tmpdir;
 	char *fname;
