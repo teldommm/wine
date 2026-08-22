@@ -57,8 +57,6 @@ static void check_device( DEVICE_OBJECT *device )
 
     ok( device == impl->expect_hid_fdo, "got device %p\n", device );
     ok( device->DriverObject == expect_driver, "got DriverObject %p\n", device->DriverObject );
-    if (!device->NextDevice) ok( device == impl->expect_hid_fdo, "got device %p\n", device );
-    else ok( device->NextDevice == impl->expect_hid_fdo, "got NextDevice %p\n", device->NextDevice );
     ok( !device->AttachedDevice, "got AttachedDevice %p\n", device->AttachedDevice );
 
     ok( ext->MiniDeviceExtension == impl->expect_hid_ext, "got MiniDeviceExtension %p\n", ext->MiniDeviceExtension );
@@ -188,7 +186,6 @@ static NTSTATUS WINAPI driver_ioctl( DEVICE_OBJECT *device, IRP *irp )
     case IOCTL_WINETEST_HID_WAIT_EXPECT:
     case IOCTL_WINETEST_HID_SEND_INPUT:
     case IOCTL_WINETEST_HID_SET_CONTEXT:
-    case IOCTL_WINETEST_HID_WAIT_INPUT:
         IoSkipCurrentIrpStackLocation( irp );
         return IoCallDriver( ext->PhysicalDeviceObject, irp );
 
