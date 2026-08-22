@@ -16,4 +16,4 @@ SOURCES = \
 	keyboard.c \
 	mouse.c \
 	version.rc \
-	gamepad.c
+    gamepad.c

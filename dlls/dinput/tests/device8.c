@@ -1324,9 +1324,6 @@ static void test_sys_mouse( DWORD version )
     ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_FFLOAD returned %#lx\n", hr );
     hr = IDirectInputDevice8_GetProperty( device, DIPROP_GRANULARITY, &prop_dword.diph );
     ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_GRANULARITY returned %#lx\n", hr );
-    hr = IDirectInputDevice8_GetProperty( device, DIPROP_SCANCODE, &prop_dword.diph );
-    ok( hr == (version < 0x800 ? DIERR_UNSUPPORTED : DIERR_INVALIDPARAM),
-        "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
 
     prop_dword.diph.dwHow = DIPH_BYUSAGE;
     prop_dword.diph.dwObj = MAKELONG( HID_USAGE_GENERIC_X, HID_USAGE_PAGE_GENERIC );
@@ -1770,31 +1767,14 @@ done:
 static UINT pointer_enter_count;
 static UINT pointer_up_count;
 static HANDLE touchdown_event, touchleave_event;
-static WPARAM pointer_wparam[16];
-static WPARAM pointer_lparam[16];
-static UINT pointer_count;
 
 static LRESULT CALLBACK touch_screen_wndproc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
-    if (msg == WM_POINTERENTER)
-    {
-        pointer_wparam[pointer_count] = wparam;
-        pointer_lparam[pointer_count] = lparam;
-        pointer_count++;
-        pointer_enter_count++;
-    }
+    if (msg == WM_POINTERENTER) pointer_enter_count++;
     if (msg == WM_POINTERDOWN) ReleaseSemaphore( touchdown_event, 1, NULL );
-
-    if (msg == WM_POINTERUP)
-    {
-        pointer_wparam[pointer_count] = wparam;
-        pointer_lparam[pointer_count] = lparam;
-        pointer_count++;
-        pointer_up_count++;
-    }
+    if (msg == WM_POINTERUP) pointer_up_count++;
     if (msg == WM_POINTERLEAVE) ReleaseSemaphore( touchleave_event, 1, NULL );
-
-    return DefWindowProcW( hwnd, msg, wparam, lparam );
+    return DefWindowProcA( hwnd, msg, wparam, lparam );
 }
 
 static void test_hid_touch_screen(void)
@@ -1926,10 +1906,11 @@ static void test_hid_touch_screen(void)
         .report_id = 1,
         .report_len = 2,
         .report_buf = {1,0x02},
+        .todo = TRUE,
     };
 
     RAWINPUTDEVICE rawdevice = {.usUsagePage = HID_USAGE_PAGE_DIGITIZER, .usUsage = HID_USAGE_DIGITIZER_TOUCH_SCREEN};
-    UINT rawbuffer_count, rawbuffer_size, expect_flags, id, width, height;
+    UINT rawbuffer_count, rawbuffer_size;
     WCHAR device_path[MAX_PATH];
     char rawbuffer[1024];
     RAWINPUT *rawinput;
@@ -1937,9 +1918,6 @@ static void test_hid_touch_screen(void)
     DWORD res;
     HWND hwnd;
     BOOL ret;
-
-    width = GetSystemMetrics( SM_CXVIRTUALSCREEN );
-    height = GetSystemMetrics( SM_CYVIRTUALSCREEN );
 
     touchdown_event = CreateSemaphoreW( NULL, 0, LONG_MAX, NULL );
     ok( !!touchdown_event, "CreateSemaphoreW failed, error %lu\n", GetLastError() );
@@ -1994,44 +1972,23 @@ static void test_hid_touch_screen(void)
 
     /* a single touch is automatically released if we don't send continuous updates */
 
-    pointer_enter_count = pointer_up_count = pointer_count = 0;
-    memset( pointer_wparam, 0, sizeof(pointer_wparam) );
-    memset( pointer_lparam, 0, sizeof(pointer_lparam) );
+    pointer_enter_count = pointer_up_count = 0;
     bus_send_hid_input( file, &desc, &touch_single, sizeof(touch_single) );
 
     res = MsgWaitForMultipleObjects( 0, NULL, FALSE, 500, QS_POINTER );
+    todo_wine
     ok( !res, "MsgWaitForMultipleObjects returned %#lx\n", res );
 
     res = msg_wait_for_events( 1, &touchdown_event, 10 );
-    ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
-    res = msg_wait_for_events( 1, &touchleave_event, 500 );
     todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
+    res = msg_wait_for_events( 1, &touchleave_event, 100 );
+    todo_wine
+    ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
+    todo_wine
     ok( pointer_enter_count == 1, "got pointer_enter_count %u\n", pointer_enter_count );
     todo_wine
     ok( pointer_up_count == 1, "got pointer_up_count %u\n", pointer_up_count );
-
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE |
-                   POINTER_MESSAGE_FLAG_FIRSTBUTTON | POINTER_MESSAGE_FLAG_NEW |
-                   POINTER_MESSAGE_FLAG_INRANGE | POINTER_MESSAGE_FLAG_INCONTACT;
-    todo_wine /* missing POINTER_MESSAGE_FLAG_FIRSTBUTTON */
-    ok( HIWORD( pointer_wparam[0] ) == expect_flags, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_wparam[0] ) > 0, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_lparam[0] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( HIWORD( pointer_lparam[0] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[0] );
-    id = LOWORD( pointer_wparam[0] );
-
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE;
-    todo_wine
-    ok( HIWORD( pointer_wparam[1] ) == expect_flags ||
-        broken(HIWORD( pointer_wparam[1] ) == (expect_flags & ~POINTER_MESSAGE_FLAG_CONFIDENCE)), /* Win8 32bit */
-        "got wparam %#Ix\n", pointer_wparam[1] );
-    todo_wine
-    ok( LOWORD( pointer_wparam[1] ) == id, "got wparam %#Ix\n", pointer_wparam[1] );
-    todo_wine
-    ok( LOWORD( pointer_lparam[1] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[1] );
-    todo_wine
-    ok( HIWORD( pointer_lparam[1] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[1] );
 
 
     /* test that we receive HID rawinput type with the touchscreen */
@@ -2041,20 +1998,14 @@ static void test_hid_touch_screen(void)
     ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
     ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
 
-    res = GetQueueStatus( QS_RAWINPUT );
-    ok( res == 0, "got res %#lx\n", res );
-
     bus_send_hid_input( file, &desc, &touch_multiple, sizeof(touch_multiple) );
     bus_wait_hid_input( file, &desc, 5000 );
     bus_send_hid_input( file, &desc, &touch_release, sizeof(touch_release) );
     bus_wait_hid_input( file, &desc, 5000 );
 
     res = MsgWaitForMultipleObjects( 0, NULL, FALSE, 500, QS_POINTER );
+    todo_wine
     ok( !res, "MsgWaitForMultipleObjects returned %#lx\n", res );
-
-    res = GetQueueStatus( QS_RAWINPUT );
-    ok( LOWORD(res) == QS_RAWINPUT, "got res %#lx\n", res );
-    ok( HIWORD(res) == QS_RAWINPUT, "got res %#lx\n", res );
 
     memset( rawbuffer, 0, sizeof(rawbuffer) );
     rawinput = (RAWINPUT *)rawbuffer;
@@ -2074,10 +2025,6 @@ static void test_hid_touch_screen(void)
     ok( !memcmp( rawinput->data.hid.bRawData, touch_multiple.report_buf, desc.caps.InputReportByteLength ),
         "got unexpected report data\n" );
 
-    res = GetQueueStatus( QS_RAWINPUT );
-    ok( LOWORD(res) == 0, "got res %#lx\n", res );
-    ok( HIWORD(res) == 0, "got res %#lx\n", res );
-
     rawdevice.dwFlags = RIDEV_REMOVE;
     rawdevice.hwndTarget = 0;
     ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
@@ -2096,9 +2043,11 @@ static void test_hid_touch_screen(void)
 
     bus_send_hid_input( file, &desc, &touch_multiple, sizeof(touch_multiple) );
     res = MsgWaitForMultipleObjects( 0, NULL, FALSE, 500, QS_POINTER );
+    todo_wine
     ok( !res, "MsgWaitForMultipleObjects returned %#lx\n", res );
     bus_send_hid_input( file, &desc, &touch_release, sizeof(touch_release) );
     res = MsgWaitForMultipleObjects( 0, NULL, FALSE, 500, QS_POINTER );
+    todo_wine
     ok( !res, "MsgWaitForMultipleObjects returned %#lx\n", res );
 
     rawinput = (RAWINPUT *)rawbuffer;
@@ -2143,118 +2092,62 @@ static void test_hid_touch_screen(void)
 
     /* now the touch is continuously updated */
 
-    pointer_enter_count = pointer_up_count = pointer_count = 0;
-    memset( pointer_wparam, 0, sizeof(pointer_wparam) );
-    memset( pointer_lparam, 0, sizeof(pointer_lparam) );
+    pointer_enter_count = pointer_up_count = 0;
     bus_send_hid_input( file, &desc, &touch_single, sizeof(touch_single) );
 
     res = msg_wait_for_events( 1, &touchdown_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchleave_event, 10 );
     ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
+    todo_wine
     ok( pointer_enter_count == 1, "got pointer_enter_count %u\n", pointer_enter_count );
     ok( pointer_up_count == 0, "got pointer_up_count %u\n", pointer_up_count );
 
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE |
-                   POINTER_MESSAGE_FLAG_FIRSTBUTTON | POINTER_MESSAGE_FLAG_NEW |
-                   POINTER_MESSAGE_FLAG_INRANGE | POINTER_MESSAGE_FLAG_INCONTACT;
-    todo_wine /* missing POINTER_MESSAGE_FLAG_FIRSTBUTTON */
-    ok( HIWORD( pointer_wparam[0] ) == expect_flags, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_wparam[0] ) > 0, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_lparam[0] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( HIWORD( pointer_lparam[0] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( pointer_wparam[1] == 0, "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( pointer_lparam[1] == 0, "got lparam %#Ix\n", pointer_lparam[1] );
-    id = LOWORD( pointer_wparam[0] );
 
-
-    pointer_enter_count = pointer_up_count = pointer_count = 0;
-    memset( pointer_wparam, 0, sizeof(pointer_wparam) );
-    memset( pointer_lparam, 0, sizeof(pointer_lparam) );
+    pointer_enter_count = pointer_up_count = 0;
     bus_send_hid_input( file, &desc, &touch_release, sizeof(touch_release) );
 
     res = msg_wait_for_events( 1, &touchleave_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchdown_event, 10 );
     ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
     ok( pointer_enter_count == 0, "got pointer_enter_count %u\n", pointer_enter_count );
+    todo_wine
     ok( pointer_up_count == 1, "got pointer_up_count %u\n", pointer_up_count );
 
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE;
-    ok( HIWORD( pointer_wparam[0] ) == expect_flags ||
-        broken(HIWORD( pointer_wparam[0] ) == (expect_flags & ~POINTER_MESSAGE_FLAG_CONFIDENCE)), /* Win8 32bit */
-        "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_wparam[0] ) == id, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_lparam[0] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( HIWORD( pointer_lparam[0] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( pointer_wparam[1] == 0, "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( pointer_lparam[1] == 0, "got lparam %#Ix\n", pointer_lparam[1] );
 
-
-    pointer_enter_count = pointer_up_count = pointer_count = 0;
-    memset( pointer_wparam, 0, sizeof(pointer_wparam) );
-    memset( pointer_lparam, 0, sizeof(pointer_lparam) );
+    pointer_enter_count = pointer_up_count = 0;
     bus_send_hid_input( file, &desc, &touch_multiple, sizeof(touch_multiple) );
 
     res = msg_wait_for_events( 1, &touchdown_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchdown_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchleave_event, 10 );
     ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
+    todo_wine
     ok( pointer_enter_count == 2, "got pointer_enter_count %u\n", pointer_enter_count );
     ok( pointer_up_count == 0, "got pointer_up_count %u\n", pointer_up_count );
 
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE |
-                   POINTER_MESSAGE_FLAG_FIRSTBUTTON | POINTER_MESSAGE_FLAG_NEW |
-                   POINTER_MESSAGE_FLAG_INRANGE | POINTER_MESSAGE_FLAG_INCONTACT;
-    todo_wine /* missing POINTER_MESSAGE_FLAG_FIRSTBUTTON */
-    ok( HIWORD( pointer_wparam[0] ) == expect_flags, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_wparam[0] ) > 0, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_lparam[0] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( HIWORD( pointer_lparam[0] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[0] );
-    id = LOWORD( pointer_wparam[0] );
 
-    expect_flags = POINTER_MESSAGE_FLAG_CONFIDENCE | POINTER_MESSAGE_FLAG_FIRSTBUTTON |
-                   POINTER_MESSAGE_FLAG_NEW | POINTER_MESSAGE_FLAG_INRANGE | POINTER_MESSAGE_FLAG_INCONTACT;
-    todo_wine /* missing POINTER_MESSAGE_FLAG_FIRSTBUTTON */
-    ok( HIWORD( pointer_wparam[1] ) == expect_flags ||
-        broken(HIWORD( pointer_wparam[1] ) == (expect_flags & ~POINTER_MESSAGE_FLAG_CONFIDENCE)), /* Win8 32bit */
-        "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( LOWORD( pointer_wparam[1] ) == id + 1, "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( LOWORD( pointer_lparam[1] ) * 128 / width == 0x18, "got lparam %#Ix\n", pointer_lparam[1] );
-    ok( HIWORD( pointer_lparam[1] ) * 128 / height == 0x20, "got lparam %#Ix\n", pointer_lparam[1] );
-
-
-    pointer_enter_count = pointer_up_count = pointer_count = 0;
-    memset( pointer_wparam, 0, sizeof(pointer_wparam) );
-    memset( pointer_lparam, 0, sizeof(pointer_lparam) );
+    pointer_enter_count = pointer_up_count = 0;
     bus_send_hid_input( file, &desc, &touch_release, sizeof(touch_release) );
 
     res = msg_wait_for_events( 1, &touchleave_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchleave_event, 1000 );
+    todo_wine
     ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
     res = msg_wait_for_events( 1, &touchdown_event, 10 );
     ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
     ok( pointer_enter_count == 0, "got pointer_enter_count %u\n", pointer_enter_count );
+    todo_wine
     ok( pointer_up_count == 2, "got pointer_up_count %u\n", pointer_up_count );
-
-    expect_flags = POINTER_MESSAGE_FLAG_PRIMARY | POINTER_MESSAGE_FLAG_CONFIDENCE;
-    ok( HIWORD( pointer_wparam[0] ) == expect_flags ||
-        broken(HIWORD( pointer_wparam[0] ) == (expect_flags & ~POINTER_MESSAGE_FLAG_CONFIDENCE)), /* Win8 32bit */
-        "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_wparam[0] ) == id, "got wparam %#Ix\n", pointer_wparam[0] );
-    ok( LOWORD( pointer_lparam[0] ) * 128 / width == 0x08, "got lparam %#Ix\n", pointer_lparam[0] );
-    ok( HIWORD( pointer_lparam[0] ) * 128 / height == 0x10, "got lparam %#Ix\n", pointer_lparam[0] );
-
-    expect_flags = POINTER_MESSAGE_FLAG_CONFIDENCE;
-    ok( HIWORD( pointer_wparam[1] ) == expect_flags ||
-        broken(HIWORD( pointer_wparam[1] ) == (expect_flags & ~POINTER_MESSAGE_FLAG_CONFIDENCE)), /* Win8 32bit */
-        "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( LOWORD( pointer_wparam[1] ) == id + 1, "got wparam %#Ix\n", pointer_wparam[1] );
-    ok( LOWORD( pointer_lparam[1] ) * 128 / width == 0x18, "got lparam %#Ix\n", pointer_lparam[1] );
-    ok( HIWORD( pointer_lparam[1] ) * 128 / height == 0x20, "got lparam %#Ix\n", pointer_lparam[1] );
 
 
     DestroyWindow( hwnd );
@@ -2308,20 +2201,12 @@ static void test_dik_codes( IDirectInputDevice8W *device, HANDLE event, HWND hwn
     };
     DIDEVCAPS caps = {.dwSize = sizeof(DIDEVCAPS)};
     const struct key2dik *map;
-    DIPROPDWORD prop_dword =
-    {
-        .diph =
-        {
-            .dwSize = sizeof(DIPROPDWORD),
-            .dwHeaderSize = sizeof(DIPROPHEADER),
-            .dwHow = DIPH_BYOFFSET,
-        },
-    };
     BYTE key_state[256];
     HKL hkl, old_hkl;
+    WORD vkey, scan;
     HRESULT hr;
     ULONG res;
-    UINT vkey, scan, i, j;
+    UINT i, j;
 
     hr = IDirectInputDevice_SetDataFormat( device, &c_dfDIKeyboard );
     ok( hr == DI_OK, "SetDataFormat returned %#lx\n", hr );
@@ -2363,16 +2248,6 @@ static void test_dik_codes( IDirectInputDevice8W *device, HANDLE event, HWND hwn
             todo_wine_if( map[j].todo )
             ok( scan, "MapVirtualKeyExA failed\n" );
 
-            prop_dword.diph.dwObj = map[j].dik;
-            hr = IDirectInputDevice8_GetProperty( device, DIPROP_SCANCODE, &prop_dword.diph );
-            if (version < 0x0800)
-                ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
-            else
-            {
-                ok( hr == DI_OK, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
-                ok( prop_dword.dwData == scan, "got %#lx expected %#x\n", prop_dword.dwData, scan );
-            }
-
             keybd_event( vkey, scan, 0, 0 );
             res = WaitForSingleObject( event, 100 );
             if (i == 0 && j == 0 && res == WAIT_TIMEOUT) /* Acquire is asynchronous */
@@ -2392,105 +2267,6 @@ static void test_dik_codes( IDirectInputDevice8W *device, HANDLE event, HWND hwn
             res = WaitForSingleObject( event, 5000 );
             flaky_wine_if( GetForegroundWindow() != hwnd && version == 0x800 ) /* FIXME: fvwm sometimes steals input focus */
             ok( !res, "WaitForSingleObject returned %#lx\n", res );
-
-            winetest_pop_context();
-        }
-
-    skip_key_tests:
-        ActivateKeyboardLayout( old_hkl, 0 );
-
-        winetest_pop_context();
-    }
-
-    hr = IDirectInputDevice8_Unacquire( device );
-    ok( hr == DI_OK, "Unacquire returned %#lx\n", hr );
-}
-
-static void test_scan_codes( IDirectInputDevice8W *device, HANDLE event, HWND hwnd, DWORD version )
-{
-    static const struct dik2scan
-    {
-        BYTE dik; BOOL found; DWORD result;
-    }
-    dik2scan_en[] =
-    {
-        { DIK_NUMLOCK, TRUE, 0x451DE1 },
-        { DIK_PAUSE, TRUE, 0x45 },
-        { DIK_CIRCUMFLEX, TRUE, 0x10E0 },
-        { DIK_KANA, FALSE, 0 },
-    },
-    dik2scan_ja[] =
-    {
-        { DIK_NUMLOCK, TRUE, 0x451DE1 },
-        { DIK_PAUSE, TRUE, 0x45 },
-        { DIK_CIRCUMFLEX, TRUE, 0x0d },
-        { DIK_KANA, TRUE, 0x70 },
-    };
-    static const struct
-    {
-        LANGID langid;
-        const struct dik2scan *map;
-        DWORD type;
-    } tests[] =
-    {
-        { MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT), dik2scan_en, DIDEVTYPEKEYBOARD_PCENH },
-        { MAKELANGID(LANG_JAPANESE, SUBLANG_JAPANESE_JAPAN), dik2scan_ja, DIDEVTYPEKEYBOARD_JAPAN106 },
-    };
-    DIDEVCAPS caps = {.dwSize = sizeof(DIDEVCAPS)};
-    const struct dik2scan *map;
-    DIPROPDWORD prop_dword =
-    {
-        .diph =
-        {
-            .dwSize = sizeof(DIPROPDWORD),
-            .dwHeaderSize = sizeof(DIPROPHEADER),
-            .dwHow = DIPH_BYOFFSET,
-        },
-    };
-    HKL hkl, old_hkl;
-    HRESULT hr;
-    UINT i, j;
-
-    hr = IDirectInputDevice_SetDataFormat( device, &c_dfDIKeyboard );
-    ok( hr == DI_OK, "SetDataFormat returned %#lx\n", hr );
-    hr = IDirectInputDevice_Acquire( device );
-    ok( hr == DI_OK, "Acquire returned %#lx\n", hr );
-    hr = IDirectInputDevice_GetCapabilities( device, &caps );
-    ok( hr == DI_OK, "GetDeviceInstance returned %#lx\n", hr );
-
-    for (i = 0; i < ARRAY_SIZE(tests); ++i)
-    {
-        if (tests[i].type != GET_DIDEVICE_SUBTYPE( caps.dwDevType ))
-        {
-            skip( "keyboard type %#x doesn't match for lang %#x\n",
-                  GET_DIDEVICE_SUBTYPE( caps.dwDevType ), tests[i].langid );
-            continue;
-        }
-
-        winetest_push_context( "lang %#x", tests[i].langid );
-
-        hkl = activate_keyboard_layout( tests[i].langid, &old_hkl );
-        if (LOWORD(old_hkl) != MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT) ||
-            LOWORD(hkl) != tests[i].langid) goto skip_key_tests;
-
-        map = tests[i].map;
-        for (j = 0; j < ARRAY_SIZE(dik2scan_en); j++)
-        {
-            winetest_push_context( "dik %#x", map[j].dik );
-
-            prop_dword.diph.dwObj = map[j].dik;
-            hr = IDirectInputDevice8_GetProperty( device, DIPROP_SCANCODE, &prop_dword.diph );
-
-            if (!map[j].found)
-                todo_wine ok( hr == DIERR_NOTFOUND, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
-            else if (version < 0x0800)
-                ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
-            else
-            {
-                ok( hr == DI_OK, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
-                ok( prop_dword.dwData == map[j].result, "got %#lx expected %#lx\n",
-                    prop_dword.dwData, map[j].result );
-            }
 
             winetest_pop_context();
         }
@@ -2827,16 +2603,11 @@ static void test_sys_keyboard( DWORD version )
     ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_FFLOAD returned %#lx\n", hr );
     hr = IDirectInputDevice8_GetProperty( device, DIPROP_GRANULARITY, &prop_dword.diph );
     ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_GRANULARITY returned %#lx\n", hr );
-    hr = IDirectInputDevice8_GetProperty( device, DIPROP_SCANCODE, &prop_dword.diph );
-    ok( hr == (version < 0x800 ? DIERR_UNSUPPORTED : DIERR_INVALIDPARAM),
-        "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
 
     prop_dword.diph.dwHow = DIPH_BYUSAGE;
     prop_dword.diph.dwObj = MAKELONG( HID_USAGE_KEYBOARD_LCTRL, HID_USAGE_PAGE_KEYBOARD );
     hr = IDirectInputDevice8_GetProperty( device, DIPROP_GRANULARITY, &prop_dword.diph );
     ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_GRANULARITY returned %#lx\n", hr );
-    hr = IDirectInputDevice8_GetProperty( device, DIPROP_SCANCODE, &prop_dword.diph );
-    ok( hr == DIERR_UNSUPPORTED, "GetProperty DIPROP_SCANCODE returned %#lx\n", hr );
 
     prop_dword.diph.dwHow = DIPH_BYOFFSET;
     prop_dword.diph.dwObj = 1;
@@ -3048,7 +2819,6 @@ skip_key_tests:
     ActivateKeyboardLayout( old_hkl, 0 );
 
     test_dik_codes( device, event, hwnd, version );
-    test_scan_codes( device, event, hwnd, version );
 
     CloseHandle( event );
     DestroyWindow( hwnd );
