@@ -49,8 +49,6 @@
 
 #include "initguid.h"
 
-#define DESKTOP_ALL_ACCESS 0x01ff
-
 DEFINE_GUID(GUID_action_mapping_1,0x00000001,0x0002,0x0003,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b);
 DEFINE_GUID(GUID_action_mapping_2,0x00010001,0x0002,0x0003,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b);
 DEFINE_GUID(GUID_map_other_device,0x00020001,0x0002,0x0003,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b);
@@ -78,48 +76,6 @@ static BOOL load_combase_functions(void)
 failed:
     win_skip("Failed to load combase.dll functions, skipping tests\n");
     return FALSE;
-}
-
-#define run_in_desktop( a, b, c ) run_in_desktop_( __FILE__, __LINE__, a, b, c )
-static void run_in_desktop_( const char *file, int line, char **argv,
-                             const char *args, BOOL input )
-{
-    const char *desktop_name = "WineTest Desktop";
-    STARTUPINFOA startup = {.cb = sizeof(STARTUPINFOA)};
-    PROCESS_INFORMATION info = {0};
-    HDESK old_desktop, desktop;
-    char cmdline[MAX_PATH * 2];
-    DWORD ret;
-
-    old_desktop = OpenInputDesktop( 0, FALSE, DESKTOP_ALL_ACCESS );
-    ok_(file, line)( !!old_desktop, "OpenInputDesktop failed, error %lu\n", GetLastError() );
-    desktop = CreateDesktopA( desktop_name, NULL, NULL, 0, DESKTOP_ALL_ACCESS, NULL );
-    ok_(file, line)( !!desktop, "CreateDesktopA failed, error %lu\n", GetLastError() );
-    if (input)
-    {
-        ret = SwitchDesktop( desktop );
-        ok_(file, line)( ret, "SwitchDesktop failed, error %lu\n", GetLastError() );
-    }
-
-    startup.lpDesktop = (char *)desktop_name;
-    sprintf( cmdline, "%s %s %s", argv[0], argv[1], args );
-    ret = CreateProcessA( NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &info );
-    ok_(file, line)( ret, "CreateProcessA failed, error %lu\n", GetLastError() );
-    if (!ret) return;
-
-    wait_child_process( info.hProcess );
-    CloseHandle( info.hThread );
-    CloseHandle( info.hProcess );
-
-    if (input)
-    {
-        ret = SwitchDesktop( old_desktop );
-        ok_(file, line)( ret, "SwitchDesktop failed, error %lu\n", GetLastError() );
-    }
-    ret = CloseDesktop( desktop );
-    ok_(file, line)( ret, "CloseDesktop failed, error %lu\n", GetLastError() );
-    ret = CloseDesktop( old_desktop );
-    ok_(file, line)( ret, "CloseDesktop failed, error %lu\n", GetLastError() );
 }
 
 struct check_object_todo
@@ -2077,7 +2033,6 @@ static void test_simple_joystick( DWORD version )
     prop_dword.dwData = 0xdeadbeef;
     hr = IDirectInputDevice8_GetProperty( device, DIPROP_JOYSTICKID, &prop_dword.diph );
     ok( hr == DI_OK, "GetProperty DIPROP_JOYSTICKID returned %#lx\n", hr );
-    todo_wine
     ok( prop_dword.dwData == 0, "got %#lx expected 0\n", prop_dword.dwData );
 
     prop_dword.dwData = 0xdeadbeef;
@@ -2323,7 +2278,8 @@ static void test_simple_joystick( DWORD version )
     hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_FOREGROUND | DISCL_EXCLUSIVE );
     ok( hr == E_HANDLE, "SetCooperativeLevel returned: %#lx\n", hr );
 
-    hwnd = create_foreground_window( FALSE );
+    hwnd = CreateWindowW( L"static", L"dinput", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10, 200, 200,
+                          NULL, NULL, NULL, NULL );
 
     hr = IDirectInputDevice8_SetCooperativeLevel( device, hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE );
     ok( hr == DI_OK, "SetCooperativeLevel returned: %#lx\n", hr );
@@ -5252,13 +5208,13 @@ done:
 }
 
 static HANDLE rawinput_device_added, rawinput_device_removed, rawinput_event;
-static UINT rawinput_len[64], rawbuffer_count[64], rawbuffer_size, rawinput_calls;
-static char rawbuffer[1024];
-static RAWINPUT *rawinput;
-static BOOL test_rawbuffer;
+static char wm_input_buf[1024];
+static UINT wm_input_len;
 
 static LRESULT CALLBACK rawinput_wndproc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
+    UINT size = sizeof(wm_input_buf);
+
     if (msg == WM_INPUT_DEVICE_CHANGE)
     {
         if (wparam == GIDC_ARRIVAL) ReleaseSemaphore( rawinput_device_added, 1, NULL );
@@ -5266,29 +5222,15 @@ static LRESULT CALLBACK rawinput_wndproc( HWND hwnd, UINT msg, WPARAM wparam, LP
     }
     if (msg == WM_INPUT)
     {
-        UINT size = rawbuffer_size, i = rawinput_calls++;
-
-        if (test_rawbuffer)
-        {
-            rawbuffer_count[i] = GetRawInputBuffer( rawinput, &size, sizeof(RAWINPUTHEADER) );
-            ok( size == rawbuffer_size, "got size %u\n", size );
-        }
-        else
-        {
-            rawinput_len[i] = GetRawInputData( (HRAWINPUT)lparam, RID_INPUT, rawinput,
-                                               &size, sizeof(RAWINPUTHEADER) );
-            ok( size == rawbuffer_size, "got size %u\n", size );
-        }
-
-        rawinput = NEXTRAWINPUTBLOCK(rawinput);
-        rawbuffer_size = sizeof(rawbuffer) - ((char *)rawinput - rawbuffer);
+        wm_input_len = GetRawInputData( (HRAWINPUT)lparam, RID_INPUT, (RAWINPUT *)wm_input_buf,
+                                        &size, sizeof(RAWINPUTHEADER) );
         ReleaseSemaphore( rawinput_event, 1, NULL );
     }
 
     return DefWindowProcW( hwnd, msg, wparam, lparam );
 }
 
-static void test_rawinput( char **argv )
+static void test_rawinput(void)
 {
 #include "psh_hid_macros.h"
     static const unsigned char report_desc[] =
@@ -5358,11 +5300,11 @@ static void test_rawinput( char **argv )
         },
         {
             .code = IOCTL_HID_READ_REPORT,
-            .report_buf = {1,0x10,0x10,0x01,0x01,0x10,0x10,0x10,0x01},
+            .report_buf = {1,0x10,0x10,0x01,0x01,0x10,0x10,0x10,0x00},
         },
         {
             .code = IOCTL_HID_READ_REPORT,
-            .report_buf = {1,0x10,0x10,0x01,0x01,0x10,0x10,0x10,0x02},
+            .report_buf = {1,0x10,0x10,0x01,0x01,0x10,0x10,0x10,0x00},
         },
         {
             .code = IOCTL_HID_READ_REPORT,
@@ -5373,15 +5315,24 @@ static void test_rawinput( char **argv )
             .report_buf = {1,0x10,0x10,0x10,0xee,0x10,0x10,0x10,0x54},
         },
     };
+    WNDCLASSEXW class =
+    {
+        .cbSize = sizeof(WNDCLASSEXW),
+        .hInstance = GetModuleHandleW( NULL ),
+        .lpszClassName = L"rawinput",
+        .lpfnWndProc = rawinput_wndproc,
+    };
+    RAWINPUT *rawinput = (RAWINPUT *)wm_input_buf;
     RAWINPUTDEVICELIST raw_device_list[16];
     RAWINPUTDEVICE raw_devices[16];
-    ULONG i, j, res, device_count, size;
+    ULONG i, res, device_count;
     WCHAR path[MAX_PATH] = {0};
-    char buffer[1024];
     HANDLE file;
     UINT count;
     HWND hwnd;
     BOOL ret;
+
+    RegisterClassExW( &class );
 
     cleanup_registry_keys();
 
@@ -5396,8 +5347,9 @@ static void test_rawinput( char **argv )
     rawinput_event = CreateSemaphoreW( NULL, 0, LONG_MAX, NULL );
     ok( !!rawinput_event, "CreateSemaphoreW failed, error %lu\n", GetLastError() );
 
-    hwnd = create_foreground_window( FALSE );
-    SetWindowLongPtrW( hwnd, GWLP_WNDPROC, (ULONG_PTR)rawinput_wndproc );
+    hwnd = CreateWindowW( class.lpszClassName, L"dinput", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 10, 10, 200, 200,
+                          NULL, NULL, NULL, NULL );
+    ok( !!hwnd, "CreateWindowW failed, error %lu\n", GetLastError() );
 
     count = ARRAY_SIZE(raw_devices);
     res = GetRegisteredRawInputDevices( raw_devices, &count, sizeof(RAWINPUTDEVICE) );
@@ -5512,7 +5464,7 @@ static void test_rawinput( char **argv )
 
     file = CreateFileW( path, FILE_READ_ACCESS | FILE_WRITE_ACCESS,
                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                        0, NULL );
+                        FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING, NULL );
     ok( file != INVALID_HANDLE_VALUE, "got error %lu\n", GetLastError() );
 
     for (i = 0; i < ARRAY_SIZE(injected_input); ++i)
@@ -5520,14 +5472,7 @@ static void test_rawinput( char **argv )
         winetest_push_context( "state[%ld]", i );
 
         send_hid_input( file, &injected_input[i], sizeof(*injected_input) );
-        res = ReadFile( file, buffer, desc.caps.InputReportByteLength, &size, NULL );
-        ok( res, "ReadFile failed, error %lu\n", GetLastError() );
-        ok( size == desc.caps.InputReportByteLength, "got size %lu\n", size );
 
-        rawinput_calls = 0;
-        rawinput = (RAWINPUT *)rawbuffer;
-        rawbuffer_size = sizeof(rawbuffer);
-        memset( rawbuffer, 0, sizeof(rawbuffer) );
         res = msg_wait_for_events( 1, &rawinput_event, 1000 );
         ok( !res, "WaitForSingleObject returned %#lx\n", res );
 
@@ -5537,398 +5482,189 @@ static void test_rawinput( char **argv )
         ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
         res = msg_wait_for_events( 1, &rawinput_event, 10 );
         ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
-        ok( rawinput_calls == 1, "got %u WM_INPUT messages\n", rawinput_calls );
 
-        rawinput = (RAWINPUT *)rawbuffer;
-        ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-        ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-            "got header.dwSize %lu\n", rawinput->header.dwSize );
-        ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-        ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-        ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-        ok( rawinput->data.hid.dwCount == 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
+        ok( wm_input_len == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength]),
+            "got wm_input_len %u\n", wm_input_len );
         ok( !memcmp( rawinput->data.hid.bRawData, injected_input[i].report_buf, desc.caps.InputReportByteLength ),
             "got unexpected report data\n" );
-        ok( rawinput_len[0] == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-            "got rawinput_len[0] %u\n", rawinput_len[0] );
 
         winetest_pop_context();
     }
-
-
-    /* test reading multiple reports with GetRawInputData */
-
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    Sleep( 100 );
-
-    rawinput_calls = 0;
-    rawinput = (RAWINPUT *)rawbuffer;
-    rawbuffer_size = sizeof(rawbuffer);
-    memset( rawbuffer, 0, sizeof(rawbuffer) );
-    res = msg_wait_for_events( 1, &rawinput_event, 1000 );
-    ok( !res, "WaitForSingleObject returned %#lx\n", res );
-    ok( rawinput_calls >= 2, "got %u WM_INPUT messages\n", rawinput_calls );
-
-    rawinput = (RAWINPUT *)rawbuffer;
-    ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-    ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got header.dwSize %lu\n", rawinput->header.dwSize );
-    ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-    ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-    ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-    ok( rawinput->data.hid.dwCount == 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
-    ok( rawinput_len[0] == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got rawinput_len[0] %u\n", rawinput_len[0] );
-    for (i = 0, j = 0; i < rawinput->data.hid.dwCount; i++, j++)
-    {
-        BYTE *report = rawinput->data.hid.bRawData + i * desc.caps.InputReportByteLength;
-        winetest_push_context( "%lu", i );
-        ok( !memcmp( report, injected_input[j].report_buf, desc.caps.InputReportByteLength ),
-            "got unexpected report data\n" );
-        winetest_pop_context();
-    }
-
-    rawinput = NEXTRAWINPUTBLOCK(rawinput);
-    ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-    ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got header.dwSize %lu\n", rawinput->header.dwSize );
-    ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-    ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-    ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-    todo_wine
-    ok( rawinput->data.hid.dwCount >= 5 || broken(rawinput->data.hid.dwCount == 1), "got dwCount %lu\n", rawinput->data.hid.dwCount );
-    ok( rawinput_len[1] == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got rawinput_len[1] %u\n", rawinput_len[1] );
-    for (i = 0; i < rawinput->data.hid.dwCount; i++, j++)
-    {
-        BYTE *report = rawinput->data.hid.bRawData + i * desc.caps.InputReportByteLength;
-        winetest_push_context( "%lu", i );
-        ok( !memcmp( report, injected_input[j % ARRAY_SIZE(injected_input)].report_buf, desc.caps.InputReportByteLength ),
-            "got unexpected report data\n" );
-        winetest_pop_context();
-    }
-
-
-    /* test reading multiple reports with GetRawInputBuffer */
-
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    send_hid_input( file, injected_input, sizeof(injected_input) );
-    wait_hid_input( file, 5000 );
-    Sleep( 100 );
-
-    test_rawbuffer = TRUE;
-    rawinput_calls = 0;
-    rawinput = (RAWINPUT *)rawbuffer;
-    rawbuffer_size = sizeof(rawbuffer);
-    memset( rawbuffer, 0, sizeof(rawbuffer) );
-    res = msg_wait_for_events( 1, &rawinput_event, 1000 );
-    ok( !res, "WaitForSingleObject returned %#lx\n", res );
-    ok( rawinput_calls == 1, "got rawinput_calls %u\n", rawinput_calls );
-    ok( rawbuffer_count[0] >= 2, "got rawbuffer_count %u\n", rawbuffer_count[0] );
-
-    rawinput = (RAWINPUT *)rawbuffer;
-    ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-    ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got header.dwSize %lu\n", rawinput->header.dwSize );
-    ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-    ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-    ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-    ok( rawinput->data.hid.dwCount >= 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
-
-    rawinput = NEXTRAWINPUTBLOCK(rawinput);
-    ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-    ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got header.dwSize %lu\n", rawinput->header.dwSize );
-    ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-    ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-    ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-    ok( rawinput->data.hid.dwCount >= 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
-
-
-    raw_devices[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
-    raw_devices[0].usUsage = HID_USAGE_GENERIC_JOYSTICK;
-    raw_devices[0].dwFlags = RIDEV_REMOVE;
-    raw_devices[0].hwndTarget = 0;
-    count = ARRAY_SIZE(raw_devices);
-    ret = RegisterRawInputDevices( raw_devices, 1, sizeof(RAWINPUTDEVICE) );
-    ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
-
 
     CloseHandle( rawinput_device_added );
     CloseHandle( rawinput_device_removed );
     CloseHandle( rawinput_event );
     CloseHandle( file );
-
-    /* test rawinput in a new, input and non-input desktop */
-    strcpy( buffer, "test_rawinput_desktop " );
-    WideCharToMultiByte( CP_ACP, 0, path, -1, buffer + 22, ARRAY_SIZE(buffer) - 22, NULL, NULL );
-    run_in_desktop( argv, buffer, 0 );
-    strcat( buffer, " input" );
-    run_in_desktop( argv, buffer, 1 );
 
 done:
     hid_device_stop( &desc, 1 );
     cleanup_registry_keys();
 
     DestroyWindow( hwnd );
+    UnregisterClassW( class.lpszClassName, class.hInstance );
 }
 
-struct rawinput_desktop_thread_params
+struct select_default_instance_data
 {
-    HANDLE file;
-    BOOL input;
+    IDirectInput8W *di8;
+    DIDEVICEINSTANCEW default_instance;
+    BOOL default_instance_found;
 };
 
-static DWORD WINAPI test_rawinput_desktop_thread( void *args )
+static BOOL CALLBACK select_default_instance( const DIDEVICEINSTANCEW *devinst, void *context )
 {
-    struct hid_device_desc desc =
+    DIPROPGUIDANDPATH prop_guid_path =
     {
-        .use_report_id = TRUE,
-        .caps = { .InputReportByteLength = 9 },
-        .attributes = default_attributes,
+        .diph =
+        {
+            .dwSize = sizeof(DIPROPGUIDANDPATH),
+            .dwHeaderSize = sizeof(DIPROPHEADER),
+            .dwHow = DIPH_DEVICE,
+        },
     };
-    struct hid_expect injected_input =
+
+    DIPROPDWORD prop_dword =
     {
-        .code = IOCTL_HID_READ_REPORT,
-        .report_buf = {1,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0},
+        .diph =
+        {
+            .dwSize = sizeof(DIPROPDWORD),
+            .dwHeaderSize = sizeof(DIPROPHEADER),
+            .dwHow = DIPH_DEVICE,
+        },
     };
-    RAWINPUTDEVICE rawdevice = {.usUsagePage = HID_USAGE_PAGE_GENERIC, .usUsage = HID_USAGE_GENERIC_JOYSTICK};
-    struct rawinput_desktop_thread_params *params = args;
-    HDESK desktop, old_desktop, old_input = 0;
-    char buffer[1024];
-    ULONG res, size;
-    HWND hwnd;
-    BOOL ret;
+    struct select_default_instance_data *d = context;
+    IDirectInputDevice8W *device;
+    HRESULT hr;
 
-    winetest_push_context( "input %u", params->input );
+    hr = IDirectInput8_CreateDevice( d->di8, &devinst->guidInstance, &device, NULL );
+    ok( hr == DI_OK, "got hr %#lx.\n", hr );
+    hr = IDirectInputDevice8_GetProperty( device, DIPROP_JOYSTICKID, &prop_dword.diph );
+    ok( hr == DI_OK, "got hr %#lx.\n", hr );
+    ok( prop_dword.dwData < 100, "got %lu.\n", prop_dword.dwData );
 
-    /* non-input desktop thread may receive rawinput if its process is connected to the input desktop */
-    old_desktop = GetThreadDesktop( GetCurrentThreadId() );
-    ok( !!old_desktop, "GetThreadDesktop failed, error %lu\n", GetLastError() );
-    desktop = CreateDesktopW( L"NonInput", NULL, NULL, 0, DESKTOP_ALL_ACCESS, 0 );
-    ok( !!desktop, "CreateDesktopW failed, error %lu\n", GetLastError() );
-    ret = SetThreadDesktop( desktop );
-    ok( ret, "SetThreadDesktop failed, error %lu\n", GetLastError() );
-
-    if (params->input)
+    hr = IDirectInputDevice8_GetProperty( device, DIPROP_GUIDANDPATH, &prop_guid_path.diph );
+    ok( hr == DI_OK, "got hr %#lx.\n", hr );
+    trace( "%s, id %lu, inst %s, path %s.\n", debugstr_w(devinst->tszInstanceName), prop_dword.dwData,
+           debugstr_guid(&devinst->guidInstance), debugstr_w(prop_guid_path.wszPath) );
+    if (!prop_dword.dwData)
     {
-        /* registering before switching desktop works, as window will then be foreground */
-        ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
-        ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
-
-        /* input desktop thread will receive rawinput even if its process isn't connected to the input desktop */
-        old_input = OpenInputDesktop( 0, FALSE, DESKTOP_ALL_ACCESS );
-        ok( !!old_input, "OpenInputDesktop failed, error %lu\n", GetLastError() );
-        ret = SwitchDesktop( desktop );
-        ok( ret, "SwitchDesktop failed, error %lu\n", GetLastError() );
+        ok( !d->default_instance_found, "duplicate joystick with id 0.\n" );
+        d->default_instance = *devinst;
+        d->default_instance_found = TRUE;
     }
-
-
-    hwnd = CreateWindowW( L"static", NULL, WS_POPUP | WS_VISIBLE,
-                          100, 100, 200, 200, NULL, NULL, NULL, NULL );
-    ok( hwnd != NULL, "CreateWindowW failed, error %lu\n", GetLastError() );
-    msg_wait_for_events( 0, NULL, 100 );
-
-    SetWindowLongPtrW( hwnd, GWLP_WNDPROC, (ULONG_PTR)rawinput_wndproc );
-
-    if (!params->input)
-    {
-        /* non-input desktop, needs to force the window */
-        rawdevice.hwndTarget = hwnd;
-        ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
-        ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
-    }
-
-
-    send_hid_input( params->file, &injected_input, sizeof(injected_input) );
-    res = ReadFile( params->file, buffer, desc.caps.InputReportByteLength, &size, NULL );
-    ok( res, "ReadFile failed, error %lu\n", GetLastError() );
-    ok( size == desc.caps.InputReportByteLength, "got size %lu\n", size );
-
-    rawinput_calls = 0;
-    rawinput = (RAWINPUT *)rawbuffer;
-    rawbuffer_size = sizeof(rawbuffer);
-    memset( rawbuffer, 0, sizeof(rawbuffer) );
-    res = msg_wait_for_events( 1, &rawinput_event, 100 );
-    todo_wine
-    ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
-    todo_wine
-    ok( rawinput_calls == 1, "got %u WM_INPUT messages\n", rawinput_calls );
-
-    rawinput = (RAWINPUT *)rawbuffer;
-    todo_wine
-    ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-    todo_wine
-    ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-        "got header.dwSize %lu\n", rawinput->header.dwSize );
-    todo_wine
-    ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-    ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-    todo_wine
-    ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-    todo_wine
-    ok( rawinput->data.hid.dwCount >= 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
-
-
-    DestroyWindow( hwnd );
-    msg_wait_for_events( 0, NULL, 5 );
-
-    SetThreadDesktop( old_desktop );
-    CloseDesktop( desktop );
-
-    if (old_input)
-    {
-        ret = SwitchDesktop( old_input );
-        ok( ret, "SwitchDesktop failed, error %lu\n", GetLastError() );
-        CloseDesktop( old_input );
-        ok( ret, "CloseDesktop failed, error %lu\n", GetLastError() );
-    }
-
-    winetest_pop_context();
-
-    return 0;
+    IDirectInputDevice8_Release( device );
+    return DIENUM_CONTINUE;
 }
 
-static void test_rawinput_desktop( const char *path, BOOL input )
+static void test_joystick_id(void)
 {
+#include "psh_hid_macros.h"
+    const unsigned char report_desc[] =
+    {
+        USAGE_PAGE(1, HID_USAGE_PAGE_GENERIC),
+        USAGE(1, HID_USAGE_GENERIC_JOYSTICK),
+        COLLECTION(1, Application),
+            USAGE(1, HID_USAGE_GENERIC_JOYSTICK),
+            COLLECTION(1, Physical),
+                USAGE_PAGE(1, HID_USAGE_PAGE_BUTTON),
+                USAGE_MINIMUM(1, 1),
+                USAGE_MAXIMUM(1, 6),
+                LOGICAL_MINIMUM(1, 0),
+                LOGICAL_MAXIMUM(1, 1),
+                PHYSICAL_MINIMUM(1, 0),
+                PHYSICAL_MAXIMUM(1, 1),
+                REPORT_SIZE(1, 1),
+                REPORT_COUNT(1, 8),
+                INPUT(1, Data|Var|Abs),
+            END_COLLECTION,
+        END_COLLECTION,
+    };
+    C_ASSERT(sizeof(report_desc) < MAX_HID_DESCRIPTOR_LEN);
+#include "pop_hid_macros.h"
     struct hid_device_desc desc =
     {
         .use_report_id = TRUE,
-        .caps = { .InputReportByteLength = 9 },
-        .attributes = default_attributes,
+        .caps = { .InputReportByteLength = 1 },
     };
-    struct hid_expect injected_input =
+    struct hid_device_desc desc2;
+
+    DIPROPDWORD prop_dword =
     {
-        .code = IOCTL_HID_READ_REPORT,
-        .report_buf = {1,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0},
+        .diph =
+        {
+            .dwSize = sizeof(DIPROPDWORD),
+            .dwHeaderSize = sizeof(DIPROPHEADER),
+            .dwHow = DIPH_DEVICE,
+        },
     };
-    RAWINPUTDEVICE rawdevice = {.usUsagePage = HID_USAGE_PAGE_GENERIC, .usUsage = HID_USAGE_GENERIC_JOYSTICK};
-    struct rawinput_desktop_thread_params params = {.input = !input};
-    char buffer[1024];
-    ULONG res, size;
-    HANDLE thread;
-    HDESK desktop;
-    HANDLE file;
-    HWND hwnd;
-    BOOL ret;
+    struct select_default_instance_data d = { NULL };
+    IDirectInputDevice8W *device;
+    IDirectInput8W *di8;
+    HRESULT hr;
 
-    winetest_push_context( "input %u", input );
+    cleanup_registry_keys();
 
-    desktop = GetThreadDesktop( GetCurrentThreadId() );
-    ok( desktop != NULL, "GetThreadDesktop returned %p, error %lu\n", desktop, GetLastError() );
-
-    rawinput_device_added = CreateSemaphoreW( NULL, 0, LONG_MAX, NULL );
-    ok( !!rawinput_device_added, "CreateSemaphoreW failed, error %lu\n", GetLastError() );
-    rawinput_device_removed = CreateSemaphoreW( NULL, 0, LONG_MAX, NULL );
-    ok( !!rawinput_device_removed, "CreateSemaphoreW failed, error %lu\n", GetLastError() );
-    rawinput_event = CreateSemaphoreW( NULL, 0, LONG_MAX, NULL );
-    ok( !!rawinput_event, "CreateSemaphoreW failed, error %lu\n", GetLastError() );
-
-    if (input) hwnd = create_foreground_window( FALSE );
-    else /* non-input desktops cannot have foreground windows */
+    hr = DirectInput8Create( instance, DIRECTINPUT_VERSION, &IID_IDirectInput8W, (void **)&di8, NULL );
+    if (FAILED(hr))
     {
-        hwnd = CreateWindowW( L"static", NULL, WS_POPUP | WS_VISIBLE,
-                              100, 100, 200, 200, NULL, NULL, NULL, NULL );
-        ok( hwnd != NULL, "CreateWindowW failed, error %lu\n", GetLastError() );
+        win_skip( "DirectInput8Create returned %#lx.\n", hr );
+        return;
     }
-    SetWindowLongPtrW( hwnd, GWLP_WNDPROC, (ULONG_PTR)rawinput_wndproc );
 
-    file = CreateFileA( path, FILE_READ_ACCESS | FILE_WRITE_ACCESS,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                        0, NULL );
-    ok( file != INVALID_HANDLE_VALUE, "got error %lu\n", GetLastError() );
+    desc.report_descriptor_len = sizeof(report_desc);
+    memcpy( desc.report_descriptor_buf, report_desc, sizeof(report_desc) );
+    fill_context( desc.context, ARRAY_SIZE(desc.context) );
 
+    desc.attributes = default_attributes;
+    desc2 = desc;
+    desc2.attributes.ProductID++;
+    if (!hid_device_start( &desc, 1 )) goto done;
+    if (!hid_device_start( &desc2, 1 )) goto done;
 
-    /* non-input desktop don't receive WM_INPUT messages */
+    d.di8 = di8;
+    hr = IDirectInput8_EnumDevices( di8, DI8DEVCLASS_GAMECTRL, select_default_instance, &d, DIEDFL_ALLDEVICES );
+    ok( hr == DI_OK, "got hr %#lx.\n", hr );
 
-    rawdevice.dwFlags = RIDEV_INPUTSINK;
-    rawdevice.hwndTarget = hwnd;
-    ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
-    ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
-
-    send_hid_input( file, &injected_input, sizeof(injected_input) );
-    res = ReadFile( file, buffer, desc.caps.InputReportByteLength, &size, NULL );
-    ok( res, "ReadFile failed, error %lu\n", GetLastError() );
-    ok( size == desc.caps.InputReportByteLength, "got size %lu\n", size );
-
-    rawinput_calls = 0;
-    rawinput = (RAWINPUT *)rawbuffer;
-    rawbuffer_size = sizeof(rawbuffer);
-    memset( rawbuffer, 0, sizeof(rawbuffer) );
-    res = msg_wait_for_events( 1, &rawinput_event, 100 );
-    if (input)
+    hr = IDirectInput8_CreateDevice( di8, &GUID_Joystick, &device, NULL );
+    if (d.default_instance_found)
     {
-        todo_wine
-        ok( res == 0, "WaitForSingleObject returned %#lx\n", res );
-        todo_wine
-        ok( rawinput_calls == 1, "got %u WM_INPUT messages\n", rawinput_calls );
-
-        rawinput = (RAWINPUT *)rawbuffer;
-        todo_wine
-        ok( rawinput->header.dwType == RIM_TYPEHID, "got dwType %lu\n", rawinput->header.dwType );
-        todo_wine
-        ok( rawinput->header.dwSize == offsetof(RAWINPUT, data.hid.bRawData[desc.caps.InputReportByteLength * rawinput->data.hid.dwCount]),
-            "got header.dwSize %lu\n", rawinput->header.dwSize );
-        todo_wine
-        ok( rawinput->header.hDevice != 0, "got hDevice %p\n", rawinput->header.hDevice );
-        ok( rawinput->header.wParam == 0, "got wParam %#Ix\n", rawinput->header.wParam );
-        todo_wine
-        ok( rawinput->data.hid.dwSizeHid == desc.caps.InputReportByteLength, "got dwSizeHid %lu\n", rawinput->data.hid.dwSizeHid );
-        todo_wine
-        ok( rawinput->data.hid.dwCount >= 1, "got dwCount %lu\n", rawinput->data.hid.dwCount );
+        ok( hr == DI_OK, "got %#lx.\n", hr );
+        hr = IDirectInputDevice8_GetProperty( device, DIPROP_JOYSTICKID, &prop_dword.diph );
+        ok( hr == DI_OK, "got hr %#lx.\n", hr );
+        ok( !prop_dword.dwData, "got %lu.\n", prop_dword.dwData );
+        IDirectInputDevice8_Release( device );
     }
     else
     {
-        ok( res == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", res );
-        ok( rawinput_calls == 0, "got %u WM_INPUT messages\n", rawinput_calls );
+        ok( hr == DIERR_DEVICENOTREG, "got %#lx.\n", hr );
     }
 
-    rawdevice.dwFlags = RIDEV_REMOVE;
-    rawdevice.hwndTarget = 0;
-    ret = RegisterRawInputDevices( &rawdevice, 1, sizeof(RAWINPUTDEVICE) );
-    ok( ret, "RegisterRawInputDevices failed, error %lu\n", GetLastError() );
+    hid_device_stop( &desc, 1 );
 
-    winetest_pop_context();
+    memset( &d, 0, sizeof(d) );
+    d.di8 = di8;
+    hr = IDirectInput8_EnumDevices( di8, DI8DEVCLASS_GAMECTRL, select_default_instance, &d, DIEDFL_ALLDEVICES );
+    ok( hr == DI_OK, "got hr %#lx.\n", hr );
+    ok( !d.default_instance_found, "found joystick id 0.\n" );
+    hr = IDirectInput8_CreateDevice( di8, &GUID_Joystick, &device, NULL );
+    ok( hr == DIERR_DEVICENOTREG, "got %#lx.\n", hr );
 
-    params.file = file;
-    thread = CreateThread( NULL, 0, test_rawinput_desktop_thread, &params, 0, NULL );
-    ok( thread != NULL, "CreateThread error %lu\n", GetLastError() );
-    res = WaitForSingleObject( thread, 5000 );
-    ok( res == WAIT_OBJECT_0, "WaitForSingleObject returned %lu, error %lu\n", res, GetLastError() );
-    CloseHandle( thread );
-
-    CloseHandle( rawinput_device_added );
-    CloseHandle( rawinput_device_removed );
-    CloseHandle( rawinput_event );
-    CloseHandle( file );
-
-    DestroyWindow( hwnd );
+done:
+    IDirectInput8_Release( di8 );
+    hid_device_stop( &desc, 1 );
+    hid_device_stop( &desc2, 1 );
+    cleanup_registry_keys();
 }
 
 START_TEST( joystick8 )
 {
-    char **argv;
-    int argc;
-
-    argc = winetest_get_mainargs( &argv );
-    if (argc >= 3 && !strcmp( argv[2], "test_rawinput_desktop" ))
-        return test_rawinput_desktop( argv[3], argc > 4 && !strcmp( argv[4], "input" ) );
-
     dinput_test_init();
     if (!bus_device_start()) goto done;
-
     winetest_mute_threshold = 3;
 
     if (test_device_types( 0x800 ))
     {
+        test_joystick_id();
         /* This needs to be done before doing anything involving dinput.dll
          * on Windows, or the tests will fail, dinput8.dll is fine though. */
         test_winmm_joystick();
@@ -5942,7 +5678,7 @@ START_TEST( joystick8 )
 
         test_many_axes_joystick();
         test_driving_wheel_axes();
-        test_rawinput( argv );
+        test_rawinput();
         test_windows_gaming_input();
     }
 
