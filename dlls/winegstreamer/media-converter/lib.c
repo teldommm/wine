@@ -305,31 +305,47 @@ void dump_fozdb_close(struct dump_fozdb *db)
 
 bool media_converter_init(void)
 {
+	const char *proton_video_convert = NULL;
+	const char *proton_audio_convert = NULL;
+	const char *proton_demuxer = NULL;
+	
     GST_DEBUG_CATEGORY_INIT(media_converter_debug,
             "protonmediaconverter", GST_DEBUG_FG_YELLOW, "Proton media converter");
 
-    if (!GST_ELEMENT_REGISTER(protonvideoconverter, NULL))
+    proton_video_convert = getenv("PROTON_VIDEO_CONVERT");
+    if (proton_video_convert == NULL || strcmp(proton_video_convert, "0") != 0)
     {
-        GST_ERROR("Failed to register protonvideoconverter.");
-        return false;
+    	if (!GST_ELEMENT_REGISTER(protonvideoconverter, NULL))
+        {
+    		GST_ERROR("Failed to register protonvideoconverter.");
+            return false;
+        }
     }
 
-    if (!GST_ELEMENT_REGISTER(protonaudioconverter, NULL))
+    proton_audio_convert = getenv("PROTON_AUDIO_CONVERT");
+    if (proton_audio_convert == NULL || strcmp(proton_audio_convert, "0") != 0) 
     {
-        GST_ERROR("Failed to register protonaudioconverter.");
-        return false;
-    }
+    	if (!GST_ELEMENT_REGISTER(protonaudioconverter, NULL))
+    	{
+        	GST_ERROR("Failed to register protonaudioconverter.");
+        	return false;
+    	}
 
-    if (!GST_ELEMENT_REGISTER(protonaudioconverterbin, NULL))
-    {
-        GST_ERROR("Failed to register protonaudioconverterbin.");
-        return false;
-    }
+    	if (!GST_ELEMENT_REGISTER(protonaudioconverterbin, NULL))
+    	{
+        	GST_ERROR("Failed to register protonaudioconverterbin.");
+        	return false;
+    	}
+	}
 
-    if (!GST_ELEMENT_REGISTER(protondemuxer, NULL))
-    {
-        GST_ERROR("Failed to register protondemuxer.");
-        return false;
+	proton_demuxer = getenv("PROTON_DEMUX");
+	if (proton_demuxer == NULL || strcmp(proton_demuxer, "0") != 0)
+	{
+    	if (!GST_ELEMENT_REGISTER(protondemuxer, NULL))
+    	{
+        	GST_ERROR("Failed to register protondemuxer.");
+        	return false;
+    	}
     }
 
     return true;
