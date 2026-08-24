@@ -129,8 +129,9 @@ XContext cursor_context = 0;
 static RECT clip_rect;
 static Cursor create_cursor( HANDLE handle );
 
+static BOOL xinput2_available = FALSE;
+
 #ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
-static BOOL xinput2_available;
 static BOOL broken_rawevents;
 #define MAKE_FUNCPTR(f) static typeof(f) * p##f
 MAKE_FUNCPTR(XIGetClientPointer);
@@ -413,7 +414,6 @@ void X11DRV_XInput2_Enable( Display *display, Window window, long event_mask )
  */
 static BOOL grab_clipping_window( const RECT *clip )
 {
-#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
     struct x11drv_thread_data *data = x11drv_thread_data();
     Window clip_window;
     HCURSOR cursor;
@@ -434,8 +434,16 @@ static BOOL grab_clipping_window( const RECT *clip )
         return FALSE;
     }
 
+    if (!xinput2_available) {
+    	WARN( "XInput2 not supported, refusing to clip to %s\n", wine_dbgstr_rect(clip) );
+    	NtUserClipCursor( NULL );
+    	return TRUE;
+    }
+
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H
     /* enable XInput2 unless we are already clipping */
     if (!data->clipping_cursor) X11DRV_XInput2_Enable( data->display, None, PointerMotionMask );
+#endif
 
     TRACE( "clipping to %s win %lx\n", wine_dbgstr_rect(clip), clip_window );
 
@@ -477,19 +485,17 @@ static BOOL grab_clipping_window( const RECT *clip )
     SERVER_END_REQ;
 
     set_window_cursor( clip_window, cursor );
-
+#ifdef HAVE_X11_EXTENSIONS_XINPUT2_H   
     if (!clipping_cursor)
     {
         X11DRV_XInput2_Enable( data->display, None, 0 );
         return FALSE;
     }
+#endif
+
     clip_rect = *clip;
     data->clipping_cursor = TRUE;
     return TRUE;
-#else
-    WARN( "XInput2 was not available at compile time\n" );
-    return FALSE;
-#endif
 }
 
 /***********************************************************************
