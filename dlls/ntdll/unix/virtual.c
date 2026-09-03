@@ -1037,6 +1037,17 @@ void *get_builtin_so_handle( void *module )
     return ret;
 }
 
+/***********************************************************************
+ *           get_unixlib_funcs
+ */
+static NTSTATUS get_unixlib_funcs( void *so_handle, BOOL wow, const void **funcs )
+{
+    const char *name = wow ? "__wine_unix_call_wow64_funcs" : "__wine_unix_call_funcs";
+
+    *funcs = dlsym( so_handle, name );
+    return *funcs ? STATUS_SUCCESS : STATUS_ENTRYPOINT_NOT_FOUND;
+}
+
 static void load_steam_overlay(const char *unix_lib_path)
 {
     const char *preload, *p;
@@ -6364,6 +6375,37 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
             FIXME("MemoryFexStatsShm unsupported\n");
             break;
 #endif
+		case MemoryWineLoadUnixLibByName:
+		case MemoryWineLoadUnixLibByNameWow64:
+			if (process == GetCurrentProcess())
+		    {
+		        UINT64 res[2];
+		        const UNICODE_STRING *name = addr;
+		        const void *funcs;
+		        void *handle;
+
+		        if ((status = load_unixlib_by_name( name, &handle ))) return status;
+		        res[0] = (UINT_PTR)handle;
+		        if (len >= sizeof(res))
+		        {
+		            if (!(status = get_unixlib_funcs( handle, info_class == MemoryWineLoadUnixLibByNameWow64, &funcs )))
+		                res[1] = (UINT_PTR)funcs;
+		        }
+		        if (status) dlclose( handle );
+		        else memcpy( buffer, res, min( len, sizeof(res) ));
+		        return status;
+		    }
+		    return STATUS_INVALID_HANDLE;
+
+		case MemoryWineUnloadUnixLib:
+		    if (process == GetCurrentProcess())
+		    {
+		        const unixlib_module_t *handle = addr;
+
+		        if (!dlclose( (void *)(UINT_PTR)*handle )) return STATUS_SUCCESS;
+		    }
+		    return STATUS_INVALID_HANDLE;
+
         default:
             FIXME("(%p,%p,info_class=%d,%p,%ld,%p) Unknown information class\n",
                   process, addr, info_class, buffer, len, res_len);
