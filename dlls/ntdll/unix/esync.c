@@ -64,10 +64,10 @@ static int shm_open(const char *name, int oflag, mode_t mode) {
 	asprintf(&fname, "%s/%s", tmpdir, name);
     int fd = open(fname, oflag, mode);
 
-    int flags = fcntl(fd, F_GETFL);
-    flags |= O_CLOEXEC;
+    int flags = fcntl(fd, F_GETFD);
+    flags |= FD_CLOEXEC;
 
-    int res = fcntl(fd, F_SETFL, O_CLOEXEC);
+    int res = fcntl(fd, F_SETFD, flags);
     if (res == -1) return res;
 
     return fd;
