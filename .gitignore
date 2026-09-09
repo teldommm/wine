@@ -18,3 +18,9 @@ server/request.h
 server/trace.c
 build-x64
 build-glibc-x64
+tools/config.guess~
+tools/config.sub~
+configure~
+include/config.h.in~
+tools/config.guess
+tools/config.sub
