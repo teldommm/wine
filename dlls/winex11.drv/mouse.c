@@ -365,6 +365,12 @@ void x11drv_xinput2_init( struct x11drv_thread_data *data )
         XIDeviceInfo *pointer_info = pXIQueryDevice( data->display, data->xinput2_pointer, &count );
         update_relative_valuators( pointer_info->classes, pointer_info->num_classes );
         pXIFreeDeviceInfo( pointer_info );
+
+        /* Raw input now comes from XI_RawMotion / XI_RawButton* (desktop thread); stop deriving
+         * it from core pointer events as well, or every movement would be reported twice. Only
+         * when X/Y valuators were found: without them raw motion events are ignored. */
+        if (data->x_valuator.number >= 0 && data->y_valuator.number >= 0)
+            win32u_set_hardware_mouse_rawinput( FALSE );
     }
 #endif
 }
@@ -401,7 +407,9 @@ void X11DRV_XInput2_Enable( Display *display, Window window, long event_mask )
     }
 
     XISetMask( mask_bits, XI_DeviceChanged );
-    pXISelectEvents( display, raw ? DefaultRootWindow( display ) : window, &mask, 1 );
+    /* libXi may be compiled in but missing at run time, or the X server may lack XInputExtension:
+     * pXISelectEvents is then NULL or useless. The core event selection below is still needed. */
+    if (xinput2_available) pXISelectEvents( display, raw ? DefaultRootWindow( display ) : window, &mask, 1 );
     if (!raw) XSelectInput( display, window, event_mask );
 }
 
