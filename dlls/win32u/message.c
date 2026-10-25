@@ -3665,24 +3665,6 @@ LRESULT send_internal_message_timeout( DWORD dest_pid, DWORD dest_tid,
     return ret;
 }
 
-/* Whether hardware mouse input reported by the graphics driver also generates raw input
- * (WM_INPUT, which DirectInput is built on). True by default: X servers without XInput2 only
- * deliver core pointer events, so raw input has to be derived from them. winex11 turns it off
- * once XInput2 raw events are available, because raw input then comes from XI_RawMotion /
- * XI_RawButton* in the desktop thread and deriving it here as well would report every movement
- * twice. Injected input (SendInput) always generates raw input. */
-static BOOL hardware_mouse_rawinput = TRUE;
-
-/***********************************************************************
- *           win32u_set_hardware_mouse_rawinput   (win32u.so)
- */
-void win32u_set_hardware_mouse_rawinput( BOOL enable )
-{
-    if (hardware_mouse_rawinput != !!enable)
-        TRACE( "hardware mouse raw input %s\n", enable ? "enabled" : "disabled (XInput2 provides it)" );
-    hardware_mouse_rawinput = !!enable;
-}
-
 /***********************************************************************
  *		send_hardware_message
  */
@@ -3733,8 +3715,7 @@ NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, const RAWINPUT *r
             req->input.mouse.flags = input->mi.dwFlags;
             req->input.mouse.time  = input->mi.time;
             req->input.mouse.info  = input->mi.dwExtraInfo;
-            if ((flags & SEND_HWMSG_INJECTED) || hardware_mouse_rawinput)
-                req->flags |= SEND_HWMSG_RAWINPUT;
+            req->flags |= SEND_HWMSG_RAWINPUT;
             break;
         case INPUT_KEYBOARD:
             req->input.kbd.vkey  = input->ki.wVk;
