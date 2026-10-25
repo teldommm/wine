@@ -2,9 +2,8 @@
 # wine-proton-9.0-arm64ec for Android (arm64ec + aarch64 + i386).
 #
 # Toolchain/termuxfs setup follows the existing proton CI scripts. Configure flags are the ones
-# from this tree's build.sh, with one change: --with-xinput --with-xinput2 (instead of
-# --without-xinput --without-xinput2), so winex11 takes raw mouse input (WM_INPUT / DirectInput)
-# from the X server's XI_RawMotion / XI_RawButton* events.
+# from this tree's build.sh (built --without-xinput --without-xinput2: raw mouse input / WM_INPUT
+# is derived from core pointer events in win32u, not from XI2 raw events).
 
 export ARCH="aarch64"
 export WIN_ARCH="arm64ec,aarch64,i386"
@@ -124,8 +123,8 @@ do
       --without-xcomposite \
       --without-xcursor \
       --without-xinerama \
-      --with-xinput \
-      --with-xinput2 \
+      --without-xinput \
+      --without-xinput2 \
       --without-xrandr \
       --without-xrender \
       --without-xshape \
@@ -133,14 +132,6 @@ do
       --without-xxf86vm \
       --without-wayland \
       --without-pcsclite || exit 1
-
-    # configure silently drops XInput when libxi is missing; fail instead of shipping without it
-    for define in HAVE_X11_EXTENSIONS_XINPUT_H HAVE_X11_EXTENSIONS_XINPUT2_H SONAME_LIBXI; do
-      if ! grep -q "^#define $define" include/config.h; then
-        echo "ERROR: XInput not enabled ($define missing from include/config.h)"
-        exit 1
-      fi
-    done
   fi
 
   if [ "$arg" == "--build" ]
@@ -179,10 +170,6 @@ do
         "$STRIP" --strip-all "$f" 2>/dev/null || "$STRIP" --strip-debug "$f" 2>/dev/null || true
       done
     echo "Package tree: ${before_mb}MB -> $(du -sm $OUTPUT_DIR | cut -f1)MB after strip"
-
-    # winex11.so must be built with XInput2
-    unixdir="$OUTPUT_DIR/lib/wine/aarch64-unix"
-    grep -q "XIQueryVersion" "$unixdir/winex11.so" || { echo "ERROR: winex11.so built without XInput2"; exit 1; }
   fi
 
   if [ "$arg" == "--package" ]
