@@ -355,6 +355,7 @@ static const char *get_pe_dir( WORD machine )
 static void set_dll_path(void)
 {
     char *p, *path = getenv( "WINEDLLPATH" ), *be_runtime = getenv( "PROTON_BATTLEYE_RUNTIME" ), *eac_runtime = getenv( "PROTON_EAC_RUNTIME" );
+    char *prefix = getenv( "PREFIX" );
     int i, count = 0;
 
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
@@ -364,6 +365,9 @@ static void set_dll_path(void)
 
     if (eac_runtime)
         count += 2;
+
+    if (prefix && *prefix)
+        count += 1;
 
     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
     count = 0;
@@ -409,6 +413,20 @@ static void set_dll_path(void)
         p = malloc( strlen(eac_runtime) + strlen(lib64) + 1 );
         strcpy(p, eac_runtime);
         strcat(p, lib64);
+
+        dll_paths[count++] = p;
+    }
+
+    /* Winlator-bionic containers set PREFIX to <imagefs>/usr; components (e.g. the FEX
+     * unixlibs libwow64fex.so / libarm64ecfex.so) drop their unix libs under
+     * $PREFIX/lib/wine/aarch64-unix. Lowest priority, so the builtin's own dir wins. */
+    if (prefix && *prefix)
+    {
+        const char suffix[] = "/lib/wine";
+
+        p = malloc( strlen(prefix) + strlen(suffix) + 1 );
+        strcpy(p, prefix);
+        strcat(p, suffix);
 
         dll_paths[count++] = p;
     }
@@ -1623,7 +1641,7 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret 
     unsigned int i, pos, namepos, maxlen = 0;
     unsigned int len = nt_name->Length / sizeof(WCHAR);
     const char *so_dir = get_so_dir( current_machine );
-    char *ptr = NULL, *file, *ext = NULL;
+    char *ptr = NULL, *file = NULL, *ext = NULL;
     void *handle = NULL;
 
     if (!len) return STATUS_DLL_NOT_FOUND;
@@ -1637,8 +1655,11 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret 
 
         InitializeObjectAttributes( &attr, (UNICODE_STRING *)nt_name, 0, 0, NULL );
         if (!nt_to_unix_file_name( &attr, &file, FILE_OPEN ))
+        {
             handle = dlopen( file, RTLD_NOW );
-            
+            if (!handle) WARN_(module)( "load_unixlib_by_name: failed to load %s: %s\n", debugstr_a(file), dlerror() );
+        }
+
         goto done;
     }
 
@@ -1648,6 +1669,11 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret 
     if (!(file = malloc( maxlen ))) return STATUS_NO_MEMORY;
 
     pos = maxlen - len - 4;
+    /* default extension position: the terminator of the name. This must be computed
+     * before pos is decremented for the leading '/', otherwise a name without an
+     * extension (FEX passes plain "libwow64fex" / "libarm64ecfex") gets its last
+     * character overwritten by ".so" ("libwow64fe.so"). */
+    ext = file + pos + len;
     /* we don't want to depend on the current codepage here */
     for (i = 0; i < len; i++)
     {
@@ -1658,7 +1684,6 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret 
     }
     file[pos + len] = 0;
     file[--pos] = '/';
-    if (!ext) ext = file + pos + len;
 
     if (build_dir)
     {
@@ -1673,10 +1698,13 @@ NTSTATUS load_unixlib_by_name( const UNICODE_STRING *nt_name, void **handle_ret 
         ptr = prepend( file + pos, so_dir, strlen(so_dir) );
         ptr = prepend( ptr, dll_paths[i], strlen(dll_paths[i]) );
         if ((handle = dlopen( ptr, RTLD_NOW ))) goto done;
+        WARN_(module)( "load_unixlib_by_name: %s: %s\n", debugstr_a(ptr), dlerror() );
 
         ptr = prepend( file + pos, dll_paths[i], strlen(dll_paths[i]) );
         if ((handle = dlopen( ptr, RTLD_NOW ))) goto done;
+        WARN_(module)( "load_unixlib_by_name: %s: %s\n", debugstr_a(ptr), dlerror() );
     }
+    WARN_(module)( "load_unixlib_by_name: no unixlib found for %s\n", debugstr_a(file + pos + 1) );
 
  done:
     free( file );
