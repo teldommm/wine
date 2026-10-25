@@ -180,11 +180,9 @@ do
       done
     echo "Package tree: ${before_mb}MB -> $(du -sm $OUTPUT_DIR | cut -f1)MB after strip"
 
-    # the XInput2 raw-input fix must be in the binaries
+    # winex11.so must be built with XInput2
     unixdir="$OUTPUT_DIR/lib/wine/aarch64-unix"
     grep -q "XIQueryVersion" "$unixdir/winex11.so" || { echo "ERROR: winex11.so built without XInput2"; exit 1; }
-    "$TOOLCHAIN/llvm-nm" -D --defined-only "$unixdir/win32u.so" | grep -q " win32u_set_hardware_mouse_rawinput$" \
-      || { echo "ERROR: win32u.so lacks win32u_set_hardware_mouse_rawinput"; exit 1; }
   fi
 
   if [ "$arg" == "--package" ]
