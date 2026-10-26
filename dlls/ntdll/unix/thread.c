@@ -558,7 +558,7 @@ static NTSTATUS context_to_server( context_t *to, USHORT to_machine, const void 
             to->ctl.arm_regs.sp   = from->Sp;
             to->ctl.arm_regs.lr   = from->Lr;
             to->ctl.arm_regs.pc   = from->Pc;
-            to->ctl.arm_regs.cpsr = from->Cpsr;
+            to->ctl.arm_regs.cpsr = from->Cpsr & cpsr_user_mask;
         }
         if (flags & CONTEXT_ARM_INTEGER)
         {
@@ -607,7 +607,7 @@ static NTSTATUS context_to_server( context_t *to, USHORT to_machine, const void 
             to->integer.arm64_regs.x[30] = from->Lr;
             to->ctl.arm64_regs.sp     = from->Sp;
             to->ctl.arm64_regs.pc     = from->Pc;
-            to->ctl.arm64_regs.pstate = from->Cpsr;
+            to->ctl.arm64_regs.pstate = from->Cpsr & cpsr_user_mask;
         }
         if (flags & CONTEXT_ARM64_INTEGER)
         {

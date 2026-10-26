@@ -606,6 +606,9 @@ static inline NTSTATUS map_section( HANDLE mapping, void **ptr, SIZE_T *size, UL
                                0, NULL, size, ViewShare, 0, protect );
 }
 
+/* CPSR bits a Windows CONTEXT may carry (Wine MR 12262) */
+static const ULONG cpsr_user_mask = 0xf620fc30;
+
 BOOL WINAPI __wine_needs_override_large_address_aware(void);
 
 #endif /* __NTDLL_UNIX_PRIVATE_H */
